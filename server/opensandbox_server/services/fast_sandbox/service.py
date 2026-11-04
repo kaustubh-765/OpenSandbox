@@ -72,6 +72,7 @@ from opensandbox_server.services.fast_sandbox.create_mapping import (
     UnsupportedFieldError,
     map_create_request,
     map_template_create_request,
+    set_resource_limits,
 )
 from opensandbox_server.services.fast_sandbox.fastpath_client import (
     FastPathClient,
@@ -326,6 +327,15 @@ class FastSandboxService(SandboxService, ExtensionService):
 
     def _pool_resources(self, namespace: str, pool_ref: str) -> dict:
         """Return the resource profile declared by the selected SandboxPool."""
+        return self._pool_profile(namespace, pool_ref)[0]
+
+    def _pool_profile(self, namespace: str, pool_ref: str) -> tuple[dict, bool]:
+        """Return the pool's default resources and whether it is ResourceAware.
+
+        A ResourceAware pool admits per-sandbox cpu/memory limits; a
+        LegacySlot pool (or a fast-sandbox too old to report the mode) keeps
+        resources fixed per pool.
+        """
         try:
             pool = self._fastpath.get_pool(namespace, pool_ref)
         except FastPathNotFound:
@@ -345,7 +355,12 @@ class FastSandboxService(SandboxService, ExtensionService):
             resources["memory"] = pool.sandbox_memory
         if pool.sandbox_pids:
             resources["pids"] = str(pool.sandbox_pids)
-        return resources
+        resource_aware = (
+            pool.HasField("sandbox_resource_profile")
+            and pool.sandbox_resource_profile.mode
+            == pb2.SANDBOX_RESOURCE_MODE_RESOURCE_AWARE
+        )
+        return resources, resource_aware
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -372,11 +387,12 @@ class FastSandboxService(SandboxService, ExtensionService):
         # the FastPath image; workload shape comes from the golden image.
         template_entrypoint: Optional[list[str]] = None
         if (request.template_id or "").strip():
-            image_ref, template_entrypoint = (
-                self.resolve_template_service().resolve_template_artifact(
-                    request.template_id.strip()
-                )
+            template_service = self.resolve_template_service()
+            template_id = request.template_id.strip()
+            image_ref, template_entrypoint = template_service.resolve_template_artifact(
+                template_id
             )
+            template_limits = template_service.resolve_template_limits(template_id)
             try:
                 create_request = map_template_create_request(
                     request,
@@ -386,6 +402,13 @@ class FastSandboxService(SandboxService, ExtensionService):
                     entrypoint=template_entrypoint,
                     fastpath_resource_pool=self._k8s.fastpath_resource_pool,
                 )
+                # A template built at an explicit size restores at that size
+                # in a ResourceAware pool. Templates without recorded limits
+                # (and LegacySlot pools) keep the pool default, as before.
+                if template_limits is not None and self._pool_profile(
+                    create_request.namespace, create_request.pool_ref
+                )[1]:
+                    set_resource_limits(create_request, template_limits)
             except UnsupportedFieldError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -410,7 +433,7 @@ class FastSandboxService(SandboxService, ExtensionService):
                         "message": str(exc),
                     },
                 ) from exc
-            pool_resources = self._pool_resources(
+            pool_resources, resource_aware = self._pool_profile(
                 create_request.namespace, create_request.pool_ref
             )
             try:
@@ -421,6 +444,7 @@ class FastSandboxService(SandboxService, ExtensionService):
                     fastpath_resource_pool=self._k8s.fastpath_resource_pool,
                     expires_at_unix_seconds=create_request.expires_at_unix_seconds,
                     pool_resources=pool_resources,
+                    resource_aware=resource_aware,
                 )
             except UnsupportedFieldError as exc:
                 raise HTTPException(

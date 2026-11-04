@@ -81,6 +81,16 @@ class CompositeSnapshotRuntime:
     ) -> None:
         self._for_source(sandbox_id).preflight_create_snapshot(sandbox_id, namespace=namespace)
 
+    def restore_resources(
+        self,
+        sandbox_id: str,
+        *,
+        namespace: str | None = None,
+    ) -> Optional[dict[str, str]]:
+        runtime = self._for_source(sandbox_id)
+        hook = getattr(runtime, "restore_resources", None)
+        return hook(sandbox_id, namespace=namespace) if hook is not None else None
+
     def create_snapshot(
         self,
         snapshot_id: str,

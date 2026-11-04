@@ -194,6 +194,9 @@ rules:
   - ""
   resources:
   - pods
+  # Nodes: placement skips fastlets on cordoned nodes (fast-sandbox
+  # feat/sized-pools-1.2.0), so every FastPath replica watches them.
+  - nodes
   verbs:
   - get
   - list

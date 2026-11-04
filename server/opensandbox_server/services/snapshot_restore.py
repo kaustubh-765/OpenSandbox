@@ -21,7 +21,7 @@ from __future__ import annotations
 from fastapi import HTTPException, status
 from starlette.concurrency import run_in_threadpool
 
-from opensandbox_server.api.schema import CreateSandboxRequest, ImageSpec
+from opensandbox_server.api.schema import CreateSandboxRequest, ImageSpec, ResourceLimits
 from opensandbox_server.repositories.snapshots.factory import get_snapshot_repository
 from opensandbox_server.services.snapshot_models import SnapshotState
 from opensandbox_server.tenants.context import get_current_tenant
@@ -103,6 +103,14 @@ async def resolve_sandbox_image_from_request(
     request._resolved_snapshot_backend = (snapshot.restore_config.backend or "").strip() or None
     if not request.entrypoint:
         request.entrypoint = list(DEFAULT_SNAPSHOT_RESTORE_ENTRYPOINT)
+    recorded = snapshot.restore_config.resources
+    if recorded and recorded.get("cpu") and recorded.get("memory"):
+        # The snapshot fixes the VM's vCPU/memory, so its recorded size wins
+        # over whatever the client sent (the SDKs always send a default
+        # 1 CPU / 2Gi). Other keys the client set are kept.
+        limits = dict(request.resource_limits.root) if request.resource_limits is not None else {}
+        limits.update({"cpu": str(recorded["cpu"]), "memory": str(recorded["memory"])})
+        request.resource_limits = ResourceLimits(root=limits)
     return request
 
 

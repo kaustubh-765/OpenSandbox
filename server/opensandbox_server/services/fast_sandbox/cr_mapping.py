@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
+
 from opensandbox_server.api.schema import ImageSpec, Sandbox, SandboxStatus
 from opensandbox_server.services.fast_sandbox.generated import fastpath_pb2 as pb2
 from opensandbox_server.services.fast_sandbox.status_mapping import map_reason, map_state
@@ -57,13 +59,24 @@ def sandbox_from_cr(cr: dict) -> Sandbox:
     state = map_state(info)
     if metadata.get("deletionTimestamp") and state not in ("Terminated", "Failed"):
         state = "Stopping"
+    # Design 2 PoC: an OCI-drive Sandbox runs the golden template; report the
+    # customer image and entrypoint it carries instead.
+    envs = {e.get("name"): e.get("value") for e in spec.get("envs") or [] if isinstance(e, dict)}
+    entrypoint = list(spec.get("command") or []) + list(spec.get("args") or [])
+    if envs.get("FSB_OCI_ENTRYPOINT"):
+        try:
+            override = json.loads(str(envs["FSB_OCI_ENTRYPOINT"]))
+            if isinstance(override, list) and all(isinstance(a, str) for a in override):
+                entrypoint = override
+        except ValueError:
+            pass
     return Sandbox(
         id=metadata["name"],
-        image=ImageSpec(uri=spec["image"], auth=None),
+        image=ImageSpec(uri=envs.get("FSB_OCI_IMAGE") or spec["image"], auth=None),
         snapshotId=None,
         platform=None,
         allocation=None,
-        entrypoint=list(spec.get("command") or []) + list(spec.get("args") or []),
+        entrypoint=entrypoint,
         metadata={
             key.removeprefix(METADATA_PREFIX): value
             for key, value in (metadata.get("labels") or {}).items()

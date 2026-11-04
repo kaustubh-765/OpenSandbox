@@ -64,6 +64,67 @@ async def test_snapshot_restore_resolves_effective_image(monkeypatch, tmp_path) 
 
 
 @pytest.mark.asyncio
+async def test_snapshot_restore_uses_recorded_size_over_client_default(monkeypatch, tmp_path) -> None:
+    repo = SQLiteSnapshotRepository(tmp_path / "snapshots.db")
+    repo.create(
+        SnapshotRecord(
+            id="snap-sized",
+            source_sandbox_id="fsb-001",
+            restore_config=SnapshotRestoreConfig(
+                image="tpl-snap", backend="fsb", resources={"cpu": "4", "memory": "8Gi"}
+            ),
+            status=SnapshotStatusRecord(
+                state=SnapshotState.READY,
+                last_transition_at=datetime.now(timezone.utc),
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        "opensandbox_server.services.snapshot_restore.get_snapshot_repository",
+        lambda: repo,
+    )
+
+    # The SDKs always send the 1 CPU / 2Gi default on a restore.
+    request = CreateSandboxRequest(
+        snapshotId="snap-sized",
+        resourceLimits=ResourceLimits(root={"cpu": "1", "memory": "2Gi"}),
+    )
+
+    resolved = await resolve_sandbox_image_from_request(request)
+    assert resolved.resource_limits is not None
+    assert resolved.resource_limits.root == {"cpu": "4", "memory": "8Gi"}
+
+
+@pytest.mark.asyncio
+async def test_snapshot_restore_without_recorded_size_keeps_client_limits(monkeypatch, tmp_path) -> None:
+    repo = SQLiteSnapshotRepository(tmp_path / "snapshots.db")
+    repo.create(
+        SnapshotRecord(
+            id="snap-unsized",
+            source_sandbox_id="fsb-002",
+            restore_config=SnapshotRestoreConfig(image="tpl-snap", backend="fsb"),
+            status=SnapshotStatusRecord(
+                state=SnapshotState.READY,
+                last_transition_at=datetime.now(timezone.utc),
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        "opensandbox_server.services.snapshot_restore.get_snapshot_repository",
+        lambda: repo,
+    )
+
+    request = CreateSandboxRequest(
+        snapshotId="snap-unsized",
+        resourceLimits=ResourceLimits(root={"cpu": "1", "memory": "2Gi"}),
+    )
+
+    resolved = await resolve_sandbox_image_from_request(request)
+    assert resolved.resource_limits is not None
+    assert resolved.resource_limits.root == {"cpu": "1", "memory": "2Gi"}
+
+
+@pytest.mark.asyncio
 async def test_snapshot_restore_records_fsb_backend_hint(monkeypatch, tmp_path) -> None:
     repo = SQLiteSnapshotRepository(tmp_path / "snapshots.db")
     repo.create(

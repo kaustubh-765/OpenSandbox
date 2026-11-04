@@ -175,13 +175,18 @@ class PersistedSnapshotService(SnapshotService):
                 },
             ) from exc
 
+        restore_config = self._default_restore_config()
+        restore_resources = getattr(self._snapshot_runtime, "restore_resources", None)
+        if restore_resources is not None:
+            restore_config.resources = restore_resources(sandbox_id, namespace=namespace)
+
         now = datetime.now(timezone.utc)
         record = SnapshotRecord(
             id=str(uuid4()),
             source_sandbox_id=sandbox_id,
             namespace=namespace,
             name=request.name,
-            restore_config=self._default_restore_config(),
+            restore_config=restore_config,
             status=SnapshotStatusRecord(
                 state=SnapshotState.CREATING,
                 reason="snapshot_accepted",
@@ -744,6 +749,7 @@ class PersistedSnapshotService(SnapshotService):
                 restore_config=SnapshotRestoreConfig(
                     image=runtime_status.image,
                     backend=runtime_status.backend,
+                    resources=record.restore_config.resources,
                 ),
                 status=SnapshotStatusRecord(
                     state=SnapshotState.READY,

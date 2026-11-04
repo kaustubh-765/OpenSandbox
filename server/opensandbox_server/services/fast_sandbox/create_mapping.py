@@ -68,6 +68,7 @@ def map_create_request(
     now: Optional[datetime] = None,
     expires_at_unix_seconds: Optional[int] = None,
     pool_resources: Optional[dict] = None,
+    resource_aware: bool = False,
 ) -> pb2.CreateSandboxRequest:
     """Map the accepted request subset to a FastPath v2 CreateSandboxRequest.
 
@@ -83,14 +84,23 @@ def map_create_request(
     Pool compatibility: ``pool_resources`` is the selected SandboxPool profile
     (e.g. {"cpu": "500m", "memory": "512Mi", "pids": "256"}). When provided,
     request ``resource_limits`` must match the pool for every key the pool
-    defines and must not declare keys the pool does not define; FastPath has
-    no per-sandbox resource field, so incompatible limits are rejected rather
-    than silently ignored.
+    defines and must not declare keys the pool does not define; incompatible
+    limits are rejected rather than silently ignored.
+
+    Per-sandbox size: when ``resource_aware`` is true (the pool runs
+    fast-sandbox's ResourceAware mode), ``cpu`` and ``memory`` limits may
+    differ from the pool default. They travel as FastPath
+    ``CreateSandboxRequest.resources.limits`` and fast-sandbox enforces its
+    Fastlet budget. Any other key keeps the equality rule above.
     """
     _reject_unsupported_fields(request)
 
+    sized_limits: Optional[dict[str, str]] = None
     if pool_resources is not None:
-        _validate_resource_limits(request, pool_resources)
+        if resource_aware:
+            sized_limits = _sized_limits(request, pool_resources)
+        else:
+            _validate_resource_limits(request, pool_resources)
 
     image = request.image
     if image is None or not image.uri.strip():
@@ -161,6 +171,9 @@ def map_create_request(
     pool_ref = (extensions.get("poolRef") or "").strip()
     create.pool_ref = pool_ref or fastpath_resource_pool
 
+    if sized_limits is not None:
+        set_resource_limits(create, sized_limits)
+
     # fast-sandbox persists metadata as labels (metadata.sandbox.fast.io/<key>)
     # and validates every entry; reject incompatible keys/values here so users
     # get a clear error instead of a confusing gRPC rejection.
@@ -179,6 +192,7 @@ def map_template_create_request(
     fastpath_resource_pool: str = "default-pool",
     now: Optional[datetime] = None,
     expires_at_unix_seconds: Optional[int] = None,
+    resource_limits: Optional[dict[str, str]] = None,
 ) -> pb2.CreateSandboxRequest:
     """Map a template-mode CreateSandboxRequest to FastPath v2.
 
@@ -187,6 +201,10 @@ def map_template_create_request(
     becomes the FastPath ``image`` and the template's recorded entrypoint
     becomes the guest command. Idempotency and metadata rules match
     :func:`map_create_request`.
+
+    ``resource_limits`` ({"cpu", "memory"}) is the template's recorded size;
+    the caller passes it only for a ResourceAware pool, so the restored VM is
+    booked at the size it was built with. ``None`` keeps the pool default.
     """
     _reject_unsupported_fields(request)
     if request.timeout is None:
@@ -225,9 +243,92 @@ def map_template_create_request(
     pool_ref = (extensions.get("poolRef") or "").strip()
     create.pool_ref = pool_ref or fastpath_resource_pool
 
+    if resource_limits is not None:
+        set_resource_limits(create, resource_limits)
+
     _validate_metadata(create.metadata)
 
     return create
+
+
+#: The keys fast-sandbox accepts as per-sandbox limits (FastPath
+#: ComputeResourceProfile); both are always sent together.
+SIZED_RESOURCE_KEYS = ("cpu", "memory")
+
+
+def set_resource_limits(create: pb2.CreateSandboxRequest, limits: dict[str, str]) -> None:
+    """Set FastPath ``resources.limits``; fast-sandbox requires cpu and memory."""
+    for key in SIZED_RESOURCE_KEYS:
+        value = str(limits.get(key) or "").strip()
+        if not value:
+            raise UnsupportedFieldError(
+                "resourceLimits", f"{key!r} is required for a per-sandbox size"
+            )
+        try:
+            positive = _canonical_quantity(value) > 0
+        except Exception:
+            positive = False
+        if not positive:
+            raise UnsupportedFieldError(
+                "resourceLimits", f"{key!r}={value!r} is not a positive resource quantity"
+            )
+    create.resources.limits.cpu = str(limits["cpu"]).strip()
+    create.resources.limits.memory = str(limits["memory"]).strip()
+
+
+def _sized_limits(request: CreateSandboxRequest, pool_resources: dict) -> dict[str, str]:
+    """Resolve per-sandbox cpu/memory limits for a ResourceAware pool.
+
+    Omitted cpu/memory fall back to the pool default; other keys must still
+    match the pool (they are not per-sandbox in fast-sandbox).
+    """
+    limits = dict(request.resource_limits.root) if request.resource_limits is not None else {}
+    sized: dict[str, str] = {}
+    for key in SIZED_RESOURCE_KEYS:
+        value = limits.pop(key, None) or pool_resources.get(key)
+        if not value:
+            raise UnsupportedFieldError(
+                "resourceLimits",
+                f"{key!r} is not set and the selected SandboxPool defines no default",
+            )
+        sized[key] = str(value)
+    for key, value in limits.items():
+        if key not in pool_resources:
+            raise UnsupportedFieldError(
+                "resourceLimits",
+                f"{key!r} is not defined by the selected SandboxPool; "
+                "only cpu and memory are per-sandbox",
+            )
+        if not _quantities_equal(pool_resources[key], value):
+            raise UnsupportedFieldError(
+                "resourceLimits",
+                f"{key!r}={value!r} does not match the SandboxPool profile "
+                f"{key!r}={pool_resources[key]!r}; only cpu and memory are per-sandbox",
+            )
+    return sized
+
+
+def canonical_size_key(cpu: str, memory: str) -> str:
+    """Canonical ``cpu/memory`` key, e.g. ("1000m", "1024Mi") -> "1/1Gi".
+
+    Used to match a sandbox size against per-size golden templates.
+    """
+    return f"{_format_cpu(_canonical_quantity(cpu))}/{_format_memory(_canonical_quantity(memory))}"
+
+
+def _format_cpu(value: decimal.Decimal) -> str:
+    if value == value.to_integral_value():
+        return str(int(value))
+    return f"{int(value * 1000)}m"
+
+
+def _format_memory(value: decimal.Decimal) -> str:
+    number = int(value)
+    for suffix, exponent in (("Ti", 40), ("Gi", 30), ("Mi", 20), ("Ki", 10)):
+        unit = 2**exponent
+        if number >= unit and number % unit == 0:
+            return f"{number // unit}{suffix}"
+    return str(number)
 
 
 def _validate_resource_limits(request: CreateSandboxRequest, pool_resources: dict) -> None:

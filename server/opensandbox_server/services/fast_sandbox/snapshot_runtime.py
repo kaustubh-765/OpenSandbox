@@ -221,6 +221,41 @@ class FastSandboxSnapshotRuntime:
             backend=_BACKEND_FSB,
         )
 
+    def restore_resources(
+        self,
+        sandbox_id: str,
+        *,
+        namespace: str | None = None,
+    ) -> Optional[dict[str, str]]:
+        """The source sandbox's per-sandbox limits ({"cpu", "memory"}), if any.
+
+        Read from the Sandbox CR ``spec.resources.limits`` (set only when the
+        sandbox was created with explicit limits in a ResourceAware pool).
+        ``None`` means the sandbox ran at the pool default.
+        """
+        ns = namespace if namespace is not None else self._namespace
+        try:
+            cr = self._k8s_client.get_custom_object(
+                group=GROUP,
+                version=VERSION,
+                namespace=ns,
+                plural=SANDBOX_PLURAL,
+                name=sandbox_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - unknown size keeps the pool default
+            logger.warning(f"Failed to read Sandbox CR {ns}/{sandbox_id} limits before snapshot: {exc}")
+            return None
+        spec = cr.get("spec") if isinstance(cr, dict) else None
+        resources = spec.get("resources") if isinstance(spec, dict) else None
+        limits = resources.get("limits") if isinstance(resources, dict) else None
+        if not isinstance(limits, dict):
+            return None
+        cpu = str(limits.get("cpu") or "").strip()
+        memory = str(limits.get("memory") or "").strip()
+        if not cpu or not memory:
+            return None
+        return {"cpu": cpu, "memory": memory}
+
     def _source_sandbox_image(self, namespace: str, sandbox_id: str) -> Optional[str]:
         """The source Sandbox CR's image, or None when unreadable."""
         try:

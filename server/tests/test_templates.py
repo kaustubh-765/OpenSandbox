@@ -311,6 +311,21 @@ def test_create_projects_env_to_crd(service, crs):
     assert "envs" not in crs.created[-1]["spec"]
 
 
+def test_create_projects_build_node_selector_annotation(service, crs):
+    import json
+
+    service.create_template(
+        _create_request(buildNodeSelector={"sandbox.fast.io/cpu-template": "T2"})
+    )
+    annotations = crs.created[-1]["metadata"]["annotations"]
+    assert json.loads(annotations["sandbox.fast.io/build-node-selector"]) == {
+        "sandbox.fast.io/cpu-template": "T2"
+    }
+
+    service.create_template(_create_request())
+    assert "annotations" not in crs.created[-1]["metadata"]
+
+
 def test_create_rejects_invalid_env_names(service):
     from fastapi import HTTPException
 
@@ -707,8 +722,9 @@ def test_template_mode_request_validation():
 
 
 class _StubFastPath:
-    def __init__(self):
+    def __init__(self, resource_aware: bool = False):
         self.last_create = None
+        self.resource_aware = resource_aware
         info = pb2.SandboxInfo(
             identity=pb2.SandboxIdentity(uid="u-1", name="sbx", namespace="ns-1"),
             runtime=pb2.RuntimeInfo(state=pb2.RUNTIME_STATE_READY),
@@ -721,6 +737,20 @@ class _StubFastPath:
     def create_sandbox(self, request, *, wait_timeout_millis=None):
         self.last_create = request
         return self._response
+
+    def get_pool(self, namespace, pool_name):
+        mode = (
+            pb2.SANDBOX_RESOURCE_MODE_RESOURCE_AWARE
+            if self.resource_aware
+            else pb2.SANDBOX_RESOURCE_MODE_LEGACY_SLOT
+        )
+        return pb2.PoolInfo(
+            namespace=namespace,
+            name=pool_name,
+            sandbox_cpu="1",
+            sandbox_memory="2Gi",
+            sandbox_resource_profile=pb2.SandboxResourceProfileInfo(mode=mode),
+        )
 
     def close(self):
         return None
@@ -754,6 +784,52 @@ def test_template_mode_create_maps_artifact_and_entrypoint(service, crs):
     assert stub.last_create.pool_ref == "default-pool"
     assert response.id.startswith("fsb-")
     assert response.entrypoint == ["python", "app.py"]
+
+
+@pytest.mark.parametrize("resource_aware", [True, False])
+def test_template_mode_create_sends_template_size_only_to_resource_aware_pool(
+    service, crs, resource_aware
+):
+    import asyncio
+
+    from opensandbox_server.services.fast_sandbox.service import FastSandboxService
+
+    sized = service.create_template(_create_request())
+    unsized = service.create_template(_create_request(resourceLimits=None))
+    for record in (sized, unsized):
+        crs.set_status("ns-1", record.crd_name, {"phase": "Succeeded", "manifestRef": "s3://b/m"})
+        _converge(service, crs, "ns-1", record.crd_name)
+
+    with patch.object(K8sClient, "_load_config"):
+        k8s = K8sClient(KubernetesRuntimeConfig())
+    stub = _StubFastPath(resource_aware=resource_aware)
+    sandbox_service = FastSandboxService(
+        _config(), fastpath_client=stub, k8s_client=k8s, template_service=service
+    )
+    try:
+        asyncio.run(
+            sandbox_service.create_sandbox(
+                CreateSandboxRequest.model_validate({"templateId": sized.template_id, "timeout": 60})
+            )
+        )
+        sized_create = stub.last_create
+        asyncio.run(
+            sandbox_service.create_sandbox(
+                CreateSandboxRequest.model_validate({"templateId": unsized.template_id, "timeout": 60})
+            )
+        )
+        unsized_create = stub.last_create
+    finally:
+        sandbox_service.close()
+
+    if resource_aware:
+        assert sized_create.HasField("resources")
+        assert sized_create.resources.limits.cpu == "2"
+        assert sized_create.resources.limits.memory == "1Gi"
+    else:
+        assert not sized_create.HasField("resources")
+    # A template without recorded limits keeps the pool default in any pool.
+    assert not unsized_create.HasField("resources")
 
 
 def test_template_mode_create_rejects_unknown_template(service):

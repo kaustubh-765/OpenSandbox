@@ -52,6 +52,89 @@ def _run(composite: CompositeSandboxService, request: CreateSandboxRequest) -> o
     return asyncio.run(composite.create_sandbox(request))
 
 
+class _PoolClient:
+    def __init__(self, annotations: dict[str, str]) -> None:
+        self.annotations = annotations
+        self.reads = 0
+
+    def get_custom_object(self, group, version, namespace, plural, name):
+        self.reads += 1
+        return {"metadata": {"name": name, "annotations": dict(self.annotations)}}
+
+
+class _GoldenFsb(_RecordingBackend):
+    def __init__(self, annotations: dict[str, str]) -> None:
+        super().__init__("fsb")
+        self.client = _PoolClient(annotations)
+
+    def _kubernetes_client(self) -> _PoolClient:
+        return self.client
+
+    def _resolve_namespace(self) -> str:
+        return "ns-1"
+
+
+def _oci_create(cpu: str | None, memory: str | None, *, entrypoint=None, env=None) -> CreateSandboxRequest:
+    limits = {k: v for k, v in (("cpu", cpu), ("memory", memory)) if v}
+    return CreateSandboxRequest.model_construct(
+        image=ImageSpec(uri="python:3.12"),
+        timeout=600,
+        entrypoint=entrypoint or ["tail", "-f", "/dev/null"],
+        env=env,
+        extensions={"poolRef": "osb-pool", "ociUser": "1000"},
+        resource_limits=ResourceLimits(root=limits) if limits else None,
+    )
+
+
+def test_oci_create_picks_golden_by_size_and_carries_image() -> None:
+    fsb = _GoldenFsb({
+        "oci.fastsandbox.io/golden-template": "tpl-default",
+        "oci.fastsandbox.io/golden-templates": '{"1/1Gi": "tpl-xs", "4/8192Mi": "tpl-l"}',
+    })
+    composite = CompositeSandboxService(kubernetes=_RecordingBackend("kubernetes"), fsb=fsb)  # type: ignore[arg-type]
+
+    _run(composite, _oci_create("1000m", "1Gi", entrypoint=["python", "-V"], env={"A": "1"}))
+    _run(composite, _oci_create("4", "8Gi"))
+    _run(composite, _oci_create("2", "4Gi"))
+    _run(composite, _oci_create(None, None))
+
+    xs, large, unknown_size, unsized = fsb.requests
+    assert xs.image.uri == "tpl-xs"
+    assert xs.env["FSB_OCI_IMAGE"] == "python:3.12"
+    assert xs.env["FSB_OCI_ENTRYPOINT"] == '["python", "-V"]'
+    assert xs.env["FSB_OCI_ENV"] == '{"A": "1"}'
+    assert xs.env["FSB_OCI_USER"] == "1000"
+    assert "ociUser" not in xs.extensions
+    assert xs.entrypoint == ["/usr/local/bin/ocirun", "agent"]
+    assert large.image.uri == "tpl-l"
+    assert unknown_size.image.uri == "tpl-default"
+    assert unsized.image.uri == "tpl-default"
+    # The pool annotations are cached between creates.
+    assert fsb.client.reads == 1
+
+
+def test_oci_create_ignores_invalid_sized_golden_annotation() -> None:
+    fsb = _GoldenFsb({
+        "oci.fastsandbox.io/golden-template": "tpl-default",
+        "oci.fastsandbox.io/golden-templates": "not-json",
+    })
+    composite = CompositeSandboxService(kubernetes=_RecordingBackend("kubernetes"), fsb=fsb)  # type: ignore[arg-type]
+
+    _run(composite, _oci_create("1", "1Gi"))
+
+    assert fsb.requests[0].image.uri == "tpl-default"
+
+
+def test_pool_without_golden_stays_with_pod_backend() -> None:
+    kubernetes = _RecordingBackend("kubernetes")
+    fsb = _GoldenFsb({})
+    composite = CompositeSandboxService(kubernetes=kubernetes, fsb=fsb)  # type: ignore[arg-type]
+
+    _run(composite, _oci_create("1", "2Gi"))
+
+    assert kubernetes.requests and fsb.requests == []
+
+
 def test_snapshot_restore_from_fsb_backend_routes_to_fsb() -> None:
     kubernetes = _RecordingBackend("kubernetes")
     fsb = _RecordingBackend("fsb")

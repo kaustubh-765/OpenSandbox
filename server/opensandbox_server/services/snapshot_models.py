@@ -51,9 +51,17 @@ class SnapshotRestoreConfig:
 
     image: str | None = None
     backend: str | None = None
+    # Per-sandbox size of the source sandbox ({"cpu", "memory"}) when it ran
+    # with explicit limits (fast-sandbox ResourceAware pools). A restore must
+    # be booked at this size: the VM's vCPU/memory are fixed by the snapshot.
+    resources: dict[str, str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        values = asdict(self)
+        if values.get("resources") is None:
+            # Keep the persisted shape of unsized snapshots unchanged.
+            values.pop("resources", None)
+        return values
 
     @classmethod
     def from_dict(cls, values: Mapping[str, Any]) -> "SnapshotRestoreConfig":
