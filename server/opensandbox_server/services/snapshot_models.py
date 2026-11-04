@@ -59,7 +59,14 @@ class SnapshotRestoreConfig:
 
     @classmethod
     def from_dict(cls, values: Mapping[str, Any]) -> "SnapshotRestoreConfig":
-        return cls(**{item.name: values[item.name] for item in fields(cls) if item.name in values})
+        config = cls(**{item.name: values[item.name] for item in fields(cls) if item.name in values})
+        if config.limits is None:
+            # Snapshots written by the 1.2.0 sized-pools fork stored the
+            # source size under "resources"; replay it like recorded limits.
+            legacy = values.get("resources")
+            if isinstance(legacy, Mapping) and legacy.get("cpu") and legacy.get("memory"):
+                config.limits = {"cpu": str(legacy["cpu"]), "memory": str(legacy["memory"])}
+        return config
 
 
 @dataclass(slots=True)

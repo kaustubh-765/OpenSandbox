@@ -3207,6 +3207,15 @@ components:
           additionalProperties:
             type: string
           description: Custom key-value metadata for management, filtering, and tagging.
+        buildNodeSelector:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Optional node labels the build pod must run on (merged into the
+            builder's nodeSelector; the platform's KVM label always applies).
+            Use it to build a template on the CPU family that will restore it,
+            e.g. {"sandbox.fast.io/cpu-template": "T2"}.
         readiness:
           $ref: '#/components/schemas/FsbTemplateReadiness'
         publish:

@@ -90,13 +90,22 @@ def map_create_request(
     Snapshot restores: ``snapshot_limits`` carries the recorded source
     limits; caller ``resource_limits`` must match them (not the pool), and a
     ResourceAware pool replays them as per-sandbox ``resources.limits``.
+
+    Per-sandbox size (fork): on a ResourceAware pool an image create may ask
+    for ``cpu``/``memory`` limits that differ from the pool default. They
+    travel as FastPath ``resources.limits`` and fast-sandbox enforces its
+    Fastlet budget; any other key keeps the equality rule above.
     """
     _reject_unsupported_fields(request)
 
+    sized_limits: Optional[dict[str, str]] = None
     if snapshot_limits is not None:
         _validate_restore_limits(request, snapshot_limits, pool_resources)
     elif pool_resources is not None:
-        _validate_resource_limits(request, pool_resources)
+        if pool_is_resource_aware:
+            sized_limits = _sized_limits(request, pool_resources)
+        else:
+            _validate_resource_limits(request, pool_resources)
 
     image = request.image
     if image is None or not image.uri.strip():
@@ -166,6 +175,9 @@ def map_create_request(
     # an invalid pool, and a padded name must not reach FastPath as-is.
     pool_ref = (extensions.get("poolRef") or "").strip()
     create.pool_ref = pool_ref or fastpath_resource_pool
+
+    if sized_limits is not None:
+        _set_resource_limits(create, sized_limits, "resourceLimits")
 
     # fast-sandbox persists metadata as labels (metadata.sandbox.fast.io/<key>)
     # and validates every entry; reject incompatible keys/values here so users
@@ -303,6 +315,61 @@ def _validate_restore_limits(
                 f"{key!r}={value!r} does not match {source} {key!r}={baseline!r}; "
                 "resources are fixed per restore source",
             )
+
+
+def _sized_limits(request: CreateSandboxRequest, pool_resources: dict) -> dict[str, str]:
+    """Resolve per-sandbox cpu/memory limits for a ResourceAware pool.
+
+    Omitted cpu/memory fall back to the pool default; other keys must still
+    match the pool (they are not per-sandbox in fast-sandbox).
+    """
+    limits = dict(request.resource_limits.root) if request.resource_limits is not None else {}
+    sized: dict[str, str] = {}
+    for key in ("cpu", "memory"):
+        value = limits.pop(key, None) or pool_resources.get(key)
+        if not value:
+            raise UnsupportedFieldError(
+                "resourceLimits",
+                f"{key!r} is not set and the selected SandboxPool defines no default",
+            )
+        sized[key] = str(value)
+    for key, value in limits.items():
+        if key not in pool_resources:
+            raise UnsupportedFieldError(
+                "resourceLimits",
+                f"{key!r} is not defined by the selected SandboxPool; "
+                "only cpu and memory are per-sandbox",
+            )
+        if not _quantities_equal(pool_resources[key], value):
+            raise UnsupportedFieldError(
+                "resourceLimits",
+                f"{key!r}={value!r} does not match the SandboxPool profile "
+                f"{key!r}={pool_resources[key]!r}; only cpu and memory are per-sandbox",
+            )
+    return sized
+
+
+def canonical_size_key(cpu: str, memory: str) -> str:
+    """Canonical ``cpu/memory`` key, e.g. ("1000m", "1024Mi") -> "1/1Gi".
+
+    Used to match a sandbox size against per-size golden templates.
+    """
+    return f"{_format_cpu(_canonical_quantity(cpu))}/{_format_memory(_canonical_quantity(memory))}"
+
+
+def _format_cpu(value: decimal.Decimal) -> str:
+    if value == value.to_integral_value():
+        return str(int(value))
+    return f"{int(value * 1000)}m"
+
+
+def _format_memory(value: decimal.Decimal) -> str:
+    number = int(value)
+    for suffix, exponent in (("Ti", 40), ("Gi", 30), ("Mi", 20), ("Ki", 10)):
+        unit = 2**exponent
+        if number >= unit and number % unit == 0:
+            return f"{number // unit}{suffix}"
+    return str(number)
 
 
 def _validate_resource_limits(request: CreateSandboxRequest, pool_resources: dict) -> None:

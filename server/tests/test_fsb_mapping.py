@@ -331,6 +331,80 @@ def test_map_create_request_skips_pool_check_when_profile_unknown():
     assert create.image == "python:3.11"
 
 
+def test_map_create_request_sends_per_sandbox_size_to_resource_aware_pool():
+    request = _base_request(resource_limits=ResourceLimits(root={"cpu": "4", "memory": "8Gi"}))
+    create = map_create_request(
+        request,
+        "sbx-1",
+        "ns-1",
+        now=NOW,
+        pool_resources={"cpu": "1", "memory": "2Gi", "pids": "256"},
+        pool_is_resource_aware=True,
+    )
+    assert create.resources.limits.cpu == "4"
+    assert create.resources.limits.memory == "8Gi"
+
+
+def test_map_create_request_resource_aware_fills_missing_limit_from_pool():
+    request = _base_request(resource_limits=ResourceLimits(root={"memory": "4Gi"}))
+    create = map_create_request(
+        request, "sbx-1", "ns-1", now=NOW,
+        pool_resources={"cpu": "1", "memory": "2Gi"}, pool_is_resource_aware=True,
+    )
+    assert (create.resources.limits.cpu, create.resources.limits.memory) == ("1", "4Gi")
+
+
+def test_map_create_request_resource_aware_without_limits_sends_pool_default():
+    create = map_create_request(
+        _base_request(resource_limits=None, extensions={"poolRef": "osb-pool"}), "sbx-1", "ns-1", now=NOW,
+        pool_resources={"cpu": "1", "memory": "2Gi"}, pool_is_resource_aware=True,
+    )
+    assert (create.resources.limits.cpu, create.resources.limits.memory) == ("1", "2Gi")
+
+
+def test_map_create_request_resource_aware_keeps_pids_fixed():
+    request = _base_request(
+        resource_limits=ResourceLimits(root={"cpu": "2", "memory": "4Gi", "pids": "999"})
+    )
+    with pytest.raises(UnsupportedFieldError) as exc_info:
+        map_create_request(
+            request, "sbx-1", "ns-1", now=NOW,
+            pool_resources={"cpu": "1", "memory": "2Gi", "pids": "256"}, pool_is_resource_aware=True,
+        )
+    assert exc_info.value.field == "resourceLimits"
+
+
+def test_map_create_request_resource_aware_rejects_non_positive_size():
+    request = _base_request(resource_limits=ResourceLimits(root={"cpu": "0", "memory": "1Gi"}))
+    with pytest.raises(UnsupportedFieldError):
+        map_create_request(
+            request, "sbx-1", "ns-1", now=NOW,
+            pool_resources={"cpu": "1", "memory": "2Gi"}, pool_is_resource_aware=True,
+        )
+
+
+def test_map_create_request_legacy_pool_sends_no_resources():
+    request = _base_request(resource_limits=ResourceLimits(root={"cpu": "1", "memory": "2Gi"}))
+    create = map_create_request(
+        request, "sbx-1", "ns-1", now=NOW, pool_resources={"cpu": "1", "memory": "2Gi"},
+    )
+    assert not create.HasField("resources")
+
+
+@pytest.mark.parametrize(
+    ("cpu", "memory", "key"),
+    [("1", "1Gi", "1/1Gi"), ("1000m", "1024Mi", "1/1Gi"), ("500m", "512Mi", "500m/512Mi"),
+     ("4", "8192Mi", "4/8Gi")],
+)
+def test_canonical_size_key(cpu, memory, key):
+    from opensandbox_server.services.fast_sandbox.create_mapping import canonical_size_key
+
+    assert canonical_size_key(cpu, memory) == key
+
+
+# -- status mapping -----------------------------------------------------------
+
+
 def _info(
     *,
     runtime_state=pb2.RUNTIME_STATE_READY,

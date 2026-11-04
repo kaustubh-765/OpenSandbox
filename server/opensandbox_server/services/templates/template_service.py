@@ -22,6 +22,7 @@ without a background task.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import re
@@ -68,6 +69,8 @@ TEMPLATE_KERNEL = "vmlinux.bin"
 # the server value wins over a client-provided env of the same name.
 EXECD_INIT_ENV = "EXECD_INIT"
 DEFAULT_VCPU = "1"
+# Read by fast-sandbox: a JSON label map merged into the build pod nodeSelector.
+BUILD_NODE_SELECTOR_ANNOTATION = "sandbox.fast.io/build-node-selector"
 DEFAULT_MEMORY = "512Mi"
 # Guest rootfs logical size when the client omits resourceLimits.disk. The
 # artifact set is uploaded and P2P-pulled at this size (plain s3 cp is not
@@ -351,6 +354,8 @@ class FastSandboxTemplateService:
         }
         # OSEP-0026: pin the machine shape; resourceLimits stays verbatim.
         spec["machine"] = effective_machine(spec)
+        if request.build_node_selector:
+            spec["buildNodeSelector"] = dict(request.build_node_selector)
         record = FastSandboxTemplateRecord(
             template_id=template_id,
             namespace=namespace,
@@ -567,6 +572,12 @@ class FastSandboxTemplateService:
             readiness_spec["warmupSeconds"] = readiness["warmupSeconds"]
         spec["readiness"] = readiness_spec
         metadata: dict = {"name": record.crd_name, "namespace": record.namespace}
+        build_node_selector = record.spec.get("buildNodeSelector") or {}
+        if build_node_selector:
+            # fast-sandbox merges this into the build pod's nodeSelector.
+            metadata["annotations"] = {
+                BUILD_NODE_SELECTOR_ANNOTATION: json.dumps(build_node_selector, sort_keys=True)
+            }
         if record.metadata:
             # fast-sandbox persists metadata as labels; values were validated
             # as Kubernetes label values at POST.

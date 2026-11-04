@@ -541,6 +541,21 @@ def test_create_does_not_inject_execd_init_by_default(service, crs):
     assert "envs" not in crs.created[-1]["spec"]
 
 
+def test_create_projects_build_node_selector_annotation(service, crs):
+    import json
+
+    service.create_template(
+        _create_request(buildNodeSelector={"sandbox.fast.io/cpu-template": "T2"})
+    )
+    annotations = crs.created[-1]["metadata"]["annotations"]
+    assert json.loads(annotations["sandbox.fast.io/build-node-selector"]) == {
+        "sandbox.fast.io/cpu-template": "T2"
+    }
+
+    service.create_template(_create_request())
+    assert "annotations" not in crs.created[-1]["metadata"]
+
+
 def test_create_rejects_invalid_env_names(service):
     from fastapi import HTTPException
 
@@ -966,7 +981,7 @@ def test_template_mode_request_validation():
 
 
 class _StubFastPath:
-    def __init__(self):
+    def __init__(self, resource_aware: bool = False):
         self.last_create = None
         self.get_pool_calls = 0
         info = pb2.SandboxInfo(

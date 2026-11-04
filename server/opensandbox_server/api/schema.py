@@ -1268,8 +1268,9 @@ class CreateSandboxRequest(BaseModel):
                     "the backend supports it."
                 )
             # Reject conflicting fields that would be ignored in pool mode
-            if bool((self.snapshot_id or "").strip()):
-                raise ValueError("snapshotId cannot be used together with poolRef.")
+            # Design 2 PoC: a snapshot may be restored into an explicitly named
+            # Fast Sandbox pool (its sizing must match the snapshot), instead of
+            # always landing in fastpath_resource_pool.
             # Normalize blank snapshotId so downstream code won't see
             # a truthy whitespace string (e.g. "   ") as a real value.
             if self.snapshot_id is not None and not self.snapshot_id.strip():
@@ -1879,6 +1880,15 @@ class CreateFsbTemplateRequest(BaseModel):
     metadata: Optional[Dict[str, str]] = Field(
         None,
         description="Custom key-value metadata for management, filtering, and tagging",
+    )
+    build_node_selector: Optional[Dict[str, str]] = Field(
+        None,
+        alias="buildNodeSelector",
+        description=(
+            "Optional node labels the build pod must run on (merged into the "
+            "builder's nodeSelector; the platform's KVM label always applies). "
+            "Use it to build a template on the CPU family that will restore it."
+        ),
     )
     readiness: Optional[FsbTemplateReadiness] = Field(
         None,

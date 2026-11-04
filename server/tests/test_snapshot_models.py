@@ -89,3 +89,16 @@ def test_snapshot_restore_config_roundtrips_recorded_limits() -> None:
     )
 
     assert SnapshotRestoreConfig.from_dict(config.to_dict()) == config
+
+
+def test_snapshot_restore_config_reads_legacy_fork_resources_as_limits() -> None:
+    # Rows written by the 1.2.0 sized-pools fork kept the source size under
+    # "resources"; they must replay like OSEP-0026 recorded limits.
+    legacy = {"image": "tpl-snap", "backend": "fsb", "resources": {"cpu": "4", "memory": "8Gi"}}
+    assert SnapshotRestoreConfig.from_dict(legacy).limits == {"cpu": "4", "memory": "8Gi"}
+
+    recorded = dict(legacy, limits={"cpu": "2", "memory": "1Gi"})
+    assert SnapshotRestoreConfig.from_dict(recorded).limits == {"cpu": "2", "memory": "1Gi"}
+
+    partial = {"image": "tpl-snap", "resources": {"cpu": "4"}}
+    assert SnapshotRestoreConfig.from_dict(partial).limits is None
