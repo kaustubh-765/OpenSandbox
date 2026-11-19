@@ -352,7 +352,7 @@ def _sized_limits(request: CreateSandboxRequest, pool_resources: dict) -> dict[s
 def canonical_size_key(cpu: str, memory: str) -> str:
     """Canonical ``cpu/memory`` key, e.g. ("1000m", "1024Mi") -> "1/1Gi".
 
-    Used to match a sandbox size against per-size golden templates.
+    Used to match a sandbox size against a pool size.
     """
     return f"{_format_cpu(_canonical_quantity(cpu))}/{_format_memory(_canonical_quantity(memory))}"
 
