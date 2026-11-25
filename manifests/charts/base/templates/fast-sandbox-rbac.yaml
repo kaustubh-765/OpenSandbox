@@ -198,6 +198,16 @@ rules:
   - get
   - list
   - watch
+# Placement skips Fastlets on cordoned (spec.unschedulable) nodes, so every
+# FastPath replica watches Nodes.
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  verbs:
+  - get
+  - list
+  - watch
 - apiGroups:
   - sandbox.fast.io
   resources:
