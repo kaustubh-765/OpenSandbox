@@ -1,6 +1,49 @@
 {{- if .Values.runtime.enabled }}
 {{- $ns := include "fast-sandbox.namespace" . }}
 {{- $dartDiscover := printf "dns:dart.%s.svc.cluster.local:%d" $ns (int .Values.runtime.dartPeerPort) }}
+{{- /* Effective agent transfer settings (FSEP-0004). The section and its
+       roll annotation render only when they differ from the agent
+       defaults, so a default install renders exactly as before. */}}
+{{- $transferIn := .Values.runtime.transfer | default dict }}
+{{- $transferDefaults := dict "format" "legacy" "compression" "none" "concurrency" 8 "chunkSizeMiB" 4 "chunkListOnly" false }}
+{{- range $k, $_ := $transferIn }}
+{{- if not (hasKey $transferDefaults $k) }}
+{{- fail (printf "runtime.transfer.%s is not a known key (format, compression, concurrency, chunkSizeMiB, chunkListOnly)" $k) }}
+{{- end }}
+{{- end }}
+{{- $transfer := dict }}
+{{- range $k, $v := $transferDefaults }}
+{{- $val := $v }}
+{{- if not (kindIs "invalid" (index $transferIn $k)) }}
+{{- $val = index $transferIn $k }}
+{{- end }}
+{{- $_ := set $transfer $k $val }}
+{{- end }}
+{{- if not (has $transfer.format (list "legacy" "chunked")) }}
+{{- fail (printf "runtime.transfer.format must be legacy or chunked, got %v" $transfer.format) }}
+{{- end }}
+{{- if not (has $transfer.compression (list "none" "zstd")) }}
+{{- fail (printf "runtime.transfer.compression must be none or zstd, got %v" $transfer.compression) }}
+{{- end }}
+{{- if not (kindIs "bool" $transfer.chunkListOnly) }}
+{{- fail (printf "runtime.transfer.chunkListOnly must be a boolean, got %v" $transfer.chunkListOnly) }}
+{{- end }}
+{{- range $k := list "concurrency" "chunkSizeMiB" }}
+{{- $n := index $transfer $k }}
+{{- if or (not (or (kindIs "int" $n) (kindIs "int64" $n) (kindIs "float64" $n))) (ne (float64 (int $n)) (float64 $n)) (lt (int $n) 1) }}
+{{- fail (printf "runtime.transfer.%s must be a positive integer, got %v" $k $n) }}
+{{- end }}
+{{- $_ := set $transfer $k (int $n) }}
+{{- end }}
+{{- if eq $transfer.format "legacy" }}
+{{- if eq $transfer.compression "zstd" }}
+{{- fail "runtime.transfer.compression=zstd requires runtime.transfer.format=chunked (the agent refuses to start with zstd on legacy)" }}
+{{- end }}
+{{- if $transfer.chunkListOnly }}
+{{- fail "runtime.transfer.chunkListOnly=true requires runtime.transfer.format=chunked (the agent refuses to start with chunkListOnly on legacy)" }}
+{{- end }}
+{{- end }}
+{{- $renderTransfer := and (not .Values.runtime.config) (ne (toJson $transfer) (toJson $transferDefaults)) }}
 {{- $probeCmd := printf "curl -fsS -X POST --unix-socket %s/runtime.sock -H 'Content-Type: application/json' -d \"{\\\"podUid\\\":\\\"$POD_UID\\\",\\\"namespace\\\":\\\"%s\\\"}\" http://firecracker-agent/v1/health | grep -q '\"ok\":true'" .Values.runtime.socketDir $ns }}
 ---
 # Node-level firecracker runtime: serves the UDS management API (artifact
@@ -130,6 +173,14 @@ data:
         cacheSize: 8GiB
         discover: {{ $dartDiscover }}
     {{- end }}
+    {{- if $renderTransfer }}
+    transfer:
+      format: {{ $transfer.format }}
+      compression: {{ $transfer.compression }}
+      concurrency: {{ $transfer.concurrency }}
+      chunkSizeMiB: {{ $transfer.chunkSizeMiB }}
+      chunkListOnly: {{ $transfer.chunkListOnly }}
+    {{- end }}
     nodeReadiness:
       enabled: true
       assetsDir: /opt/fast-sandbox/firecracker
@@ -169,6 +220,11 @@ spec:
         kubectl.kubernetes.io/default-container: firecracker-agent
         {{- with .Values.runtime.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $renderTransfer }}
+        # The transfer section is read only at agent startup: a change of
+        # the effective settings rolls the DaemonSet.
+        fast-sandbox.io/transfer-checksum: {{ toJson $transfer | sha256sum }}
         {{- end }}
     spec:
       {{- with .Values.imagePullSecrets }}

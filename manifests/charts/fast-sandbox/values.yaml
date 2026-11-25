@@ -306,6 +306,29 @@ runtime:
   # -- DART P2P peer listen port (also the headless dart Service port;
   # rendered only when runtime.p2p.enabled=true)
   dartPeerPort: 9000
+  # Snapshot artifact transfer between the node and the artifact store
+  # (the agent.yaml transfer section, FSEP-0004). With every key at its
+  # default the chart renders no transfer section, so the agent keeps its
+  # built-in defaults. Any other value renders the full section plus a
+  # checksum pod annotation, so a change rolls the DaemonSet. Ignored when
+  # runtime.config is set (put a transfer section in it instead).
+  transfer:
+    # -- Transfer format: legacy (whole-file artifact sets) or chunked
+    # (zero-elided, content-addressed chunks with parallel transfers).
+    # Pulls read both layouts in either mode, so switching back to legacy
+    # keeps chunked snapshots restorable. Every node must run an agent
+    # image that supports the transfer section before it is set.
+    format: legacy
+    # -- Chunk object compression: none or zstd (chunked only)
+    compression: none
+    # -- Parallel transfers per publish/pull
+    concurrency: 8
+    # -- Chunk size of new chunked sets in MiB
+    chunkSizeMiB: 4
+    # -- Omit the whole-file sha256 of native files from chunked manifests
+    # (chunked only). Older chunk readers cannot restore such sets; enable
+    # it only once every agent and Fastlet supports the chunkList digest.
+    chunkListOnly: false
   # -- Agent config (agent.yaml). Empty = the chart default (upstream
   # config/dev/agent-config.yaml with the dart discover URL pointing at
   # this chart's namespace). socket/stateRoot/registryConfig/p2p are

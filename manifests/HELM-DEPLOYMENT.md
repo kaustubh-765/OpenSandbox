@@ -594,6 +594,8 @@ Point the OpenSandbox server's `[runtime]`/fsb configuration and the ingress gat
 
 By default FastPath serves native gRPC only (`fast-sandbox-fastpath:9090`). To also serve the same RPC methods to HTTP/1.1 clients over gRPC-Web (for example Java clients using [Armeria](https://armeria.dev/docs/client/grpc/) with their existing generated stubs), set `controller.fastpathHTTPPort` (`fast-sandbox.controller.fastpathHTTPPort` in the umbrella chart) to a non-zero port such as `8090`: the chart passes it to the controller's `--fastpath-http-port` flag and exposes it on the `fast-sandbox-fastpath` Service. The listener is disabled by default. See the upstream [gRPC-Web API reference](https://github.com/opensandbox-group/fast-sandbox/blob/main/docs/reference/api.md#grpc-web-over-http11) for client construction.
 
+Snapshot artifacts move between the nodes and the artifact store in the `legacy` whole-file format by default. To use the chunked format (fast-sandbox FSEP-0004), set `runtime.transfer.format=chunked` (`fast-sandbox.runtime.transfer.*` in the umbrella chart), optionally with `compression=zstd`, `concurrency`, `chunkSizeMiB` and `chunkListOnly=true`. The pinned fast-sandbox commit must include the agent `transfer` section. With all defaults the chart renders no `transfer` section; any other setting renders it with a checksum pod annotation, so a change rolls the runtime DaemonSet. `zstd` or `chunkListOnly=true` with `legacy` fails the render, as it would fail agent startup.
+
 ### Bumping the pinned fast-sandbox commit
 
 ```bash
