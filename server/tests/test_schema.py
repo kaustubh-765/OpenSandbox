@@ -865,14 +865,22 @@ class TestCreateSandboxRequestPoolMode:
         assert request.extensions["poolRef"] == "my-pool"
         assert request.env == {"KEY": "value"}
 
-    def test_pool_mode_rejects_snapshot_id_with_pool_ref(self):
-        with pytest.raises(ValidationError) as exc_info:
+    def test_pool_mode_accepts_snapshot_id_with_pool_ref(self):
+        """A snapshot may be restored into a named pool; the backend decides."""
+        request = CreateSandboxRequest(
+            snapshotId="snap-001",
+            extensions={"poolRef": "my-pool"},
+        )
+        assert request.snapshot_id == "snap-001"
+        assert request.extensions["poolRef"] == "my-pool"
+
+    def test_pool_mode_rejects_snapshot_id_with_image(self):
+        with pytest.raises(ValidationError, match="Exactly one of image or snapshotId"):
             CreateSandboxRequest(
                 snapshotId="snap-001",
+                image=ImageSpec(uri="python:3.11"),
                 extensions={"poolRef": "my-pool"},
             )
-        errors = exc_info.value.errors()
-        assert any("snapshotId" in str(e) and "poolRef" in str(e) for e in errors)
 
     def test_pool_mode_parses_credential_proxy_for_service_validation(self):
         """The service returns the documented 400 instead of a parsing-time 422."""
