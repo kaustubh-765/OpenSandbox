@@ -86,6 +86,20 @@ class FastPathAuthChartsTest(unittest.TestCase):
             binding["subjects"],
         )
 
+    def test_fastpath_role_watches_nodes(self):
+        # Mirrors fast-sandbox config/rbac/base.yaml: placement skips
+        # Fastlets on cordoned nodes, so the FastPath role reads Nodes.
+        resources = self.render("base")
+        role = next(
+            x
+            for x in resources
+            if x["kind"] == "ClusterRole" and x["metadata"]["name"] == "fast-sandbox-fastpath"
+        )
+        self.assertIn(
+            {"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch"]},
+            role["rules"],
+        )
+
     def test_policy_tls_and_both_listeners(self):
         resources = self.render(
             "fast-sandbox",
