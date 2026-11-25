@@ -87,12 +87,18 @@ def map_create_request(
     request ``resource_limits`` must match the pool for every key the pool
     defines and must not declare keys the pool does not define.
 
+    On a ResourceAware pool (``pool_is_resource_aware``) image creates may
+    set ``cpu``/``memory`` limits that differ from the pool defaults; they are
+    forwarded as per-sandbox ``resources.limits`` and FastPath stays the
+    budget authority. Any other key keeps the equality rule above.
+
     Snapshot restores: ``snapshot_limits`` carries the recorded source
     limits; caller ``resource_limits`` must match them (not the pool), and a
     ResourceAware pool replays them as per-sandbox ``resources.limits``.
     """
     _reject_unsupported_fields(request)
 
+    sized_limits: Optional[dict[str, str]] = None
     if request._resolved_rootfs_only and pool_is_resource_aware:
         if pool_resources is not None and request.resource_limits is not None and "pids" in request.resource_limits.root:
             pids = request.resource_limits.root["pids"]
@@ -100,6 +106,8 @@ def map_create_request(
                 raise UnsupportedFieldError("resourceLimits", "pids must match the pool profile")
     elif snapshot_limits is not None:
         _validate_restore_limits(request, snapshot_limits, pool_resources)
+    elif pool_resources is not None and pool_is_resource_aware:
+        sized_limits = _sized_limits(request, pool_resources)
     elif pool_resources is not None:
         _validate_resource_limits(request, pool_resources)
 
@@ -177,8 +185,11 @@ def map_create_request(
     # get a clear error instead of a confusing gRPC rejection.
     _validate_metadata(create.metadata)
 
-    if not request._resolved_rootfs_only and snapshot_limits is not None and pool_is_resource_aware:
-        _set_resource_limits(create, snapshot_limits, "snapshotLimits")
+    if not request._resolved_rootfs_only and pool_is_resource_aware:
+        if snapshot_limits is not None:
+            _set_resource_limits(create, snapshot_limits, "snapshotLimits")
+        elif sized_limits is not None:
+            _set_resource_limits(create, sized_limits, "resourceLimits")
 
     return create
 
@@ -266,17 +277,17 @@ def _set_resource_limits(
     except Exception:
         raise UnsupportedFieldError(
             field,
-            f"recorded shape is not a valid quantity pair: cpu={cpu!r}, memory={memory!r}",
+            f"shape is not a valid quantity pair: cpu={cpu!r}, memory={memory!r}",
         ) from None
     if cpu_quantity <= 0 or memory_quantity <= 0:
         raise UnsupportedFieldError(
             field,
-            f"recorded shape must be positive: cpu={cpu!r}, memory={memory!r}",
+            f"shape must be positive: cpu={cpu!r}, memory={memory!r}",
         )
     if cpu_quantity < decimal.Decimal("0.01"):
         raise UnsupportedFieldError(
             field,
-            f"recorded cpu {cpu!r} is below the FastPath minimum of 10m",
+            f"cpu {cpu!r} is below the FastPath minimum of 10m",
         )
     create.resources.limits.cpu = cpu
     create.resources.limits.memory = memory
@@ -308,6 +319,45 @@ def _validate_restore_limits(
                 f"{key!r}={value!r} does not match {source} {key!r}={baseline!r}; "
                 "resources are fixed per restore source",
             )
+
+
+def _sized_limits(request: CreateSandboxRequest, pool_resources: dict) -> Optional[dict]:
+    """Per-sandbox cpu/memory for an image create on a ResourceAware pool.
+
+    Returns None when the caller sets neither, so the request stays
+    field-omitted and FastPath applies the pool defaults. A single given
+    dimension is completed from the pool default. Keys other than cpu and
+    memory stay pool-owned and must match the profile.
+    """
+    if request.resource_limits is None:
+        return None
+    limits = dict(request.resource_limits.root)
+    if "cpu" not in limits and "memory" not in limits:
+        _validate_resource_limits(request, pool_resources)
+        return None
+    sized: dict[str, str] = {}
+    for key in ("cpu", "memory"):
+        value = limits.pop(key, None) or pool_resources.get(key)
+        if not value:
+            raise UnsupportedFieldError(
+                "resourceLimits",
+                f"{key!r} is not set and the selected SandboxPool defines no default",
+            )
+        sized[key] = str(value)
+    for key, value in limits.items():
+        if key not in pool_resources:
+            raise UnsupportedFieldError(
+                "resourceLimits",
+                f"{key!r} is not defined by the selected SandboxPool; "
+                "only cpu and memory are per-sandbox",
+            )
+        if not _quantities_equal(pool_resources[key], value):
+            raise UnsupportedFieldError(
+                "resourceLimits",
+                f"{key!r}={value!r} does not match the SandboxPool profile "
+                f"{key!r}={pool_resources[key]!r}; only cpu and memory are per-sandbox",
+            )
+    return sized
 
 
 def _validate_resource_limits(request: CreateSandboxRequest, pool_resources: dict) -> None:
