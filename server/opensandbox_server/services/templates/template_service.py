@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import uuid
@@ -42,7 +43,11 @@ from opensandbox_server.services.templates.template_models import (
     FastSandboxTemplateRecord,
 )
 from opensandbox_server.services.k8s.client import K8sClient
-from opensandbox_server.services.validators import ensure_metadata_labels
+from opensandbox_server.services.validators import (
+    ensure_metadata_labels,
+    is_valid_label_key,
+    is_valid_label_value,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +72,8 @@ DEFAULT_MEMORY = "512Mi"
 # sparse-aware), so the fallback stays small instead of the 30Gi CRD default.
 DEFAULT_ROOTFS_SIZE = "2Gi"
 DEFAULT_ENTRYPOINT = ["tail", "-f", "/dev/null"]
+# fast-sandbox merges this JSON label map into the build pod's nodeSelector.
+BUILD_NODE_SELECTOR_ANNOTATION = "sandbox.fast.io/build-node-selector"
 
 # Template resourceLimits only accept these keys; anything else would be
 # silently dropped by the CRD mapping.
@@ -298,6 +305,24 @@ class FastSandboxTemplateService:
                         ),
                     },
                 )
+        if request.build_node_selector:
+            invalid_selector = [
+                f"{key}={value}"
+                for key, value in request.build_node_selector.items()
+                if not is_valid_label_key(key) or not is_valid_label_value(value)
+            ]
+            if invalid_selector:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "code": SandboxErrorCodes.INVALID_PARAMETER,
+                        "message": (
+                            f"Invalid buildNodeSelector entries: "
+                            f"{', '.join(sorted(invalid_selector))}; keys and values "
+                            f"must be valid Kubernetes label keys and values."
+                        ),
+                    },
+                )
         publish = request.publish.strip()
         publish_error = _publish_validation_error(request.format, publish)
         if publish_error:
@@ -342,6 +367,8 @@ class FastSandboxTemplateService:
             "publish": publish,
             "format": request.format,
         }
+        if request.build_node_selector:
+            spec["buildNodeSelector"] = dict(request.build_node_selector)
         # OSEP-0026: pin the machine shape; resourceLimits stays verbatim.
         spec["machine"] = effective_machine(spec)
         record = FastSandboxTemplateRecord(
@@ -560,6 +587,11 @@ class FastSandboxTemplateService:
             readiness_spec["warmupSeconds"] = readiness["warmupSeconds"]
         spec["readiness"] = readiness_spec
         metadata: dict = {"name": record.crd_name, "namespace": record.namespace}
+        build_node_selector = record.spec.get("buildNodeSelector")
+        if build_node_selector:
+            metadata["annotations"] = {
+                BUILD_NODE_SELECTOR_ANNOTATION: json.dumps(build_node_selector, sort_keys=True)
+            }
         if record.metadata:
             # fast-sandbox persists metadata as labels; values were validated
             # as Kubernetes label values at POST.
