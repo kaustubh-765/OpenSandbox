@@ -3249,6 +3249,18 @@ components:
           additionalProperties:
             type: string
           description: Custom key-value metadata for management, filtering, and tagging.
+        buildNodeSelector:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Node labels the build pod must also match. They are merged into the
+            builder's nodeSelector; the platform's KVM label always applies. Use
+            it to build a template on the CPU family that will restore it, because
+            a microVM snapshot restores only on a compatible CPU. Keys and values
+            must be valid Kubernetes label keys and values.
+          example:
+            example.com/cpu-family: "family-a"
         readiness:
           $ref: '#/components/schemas/FsbTemplateReadiness'
         publish:
