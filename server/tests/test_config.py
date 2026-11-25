@@ -237,6 +237,12 @@ def test_server_config_defaults_include_max_sandbox_timeout():
     assert server_cfg.max_sandbox_timeout_seconds is None
 
 
+def test_kubernetes_fastpath_image_pools_default_empty():
+    assert config_module.KubernetesRuntimeConfig().fastpath_image_pools == []
+    cfg = config_module.KubernetesRuntimeConfig(fastpath_image_pools=["fsb-pool"])
+    assert cfg.fastpath_image_pools == ["fsb-pool"]
+
+
 def test_kubernetes_pool_acquisition_timeout_defaults_and_validates():
     kubernetes_cfg = config_module.KubernetesRuntimeConfig()
     assert kubernetes_cfg.pool_acquisition_timeout_seconds == 30
