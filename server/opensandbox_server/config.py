@@ -830,6 +830,14 @@ class KubernetesRuntimeConfig(BaseModel):
         default="default-pool",
         description="Default fast-sandbox SandboxPool when extensions.poolRef is unset.",
     )
+    fastpath_image_pools: list[str] = Field(
+        default_factory=list,
+        description=(
+            "fast-sandbox SandboxPools that serve plain image creates: a create "
+            "whose extensions.poolRef names one of them goes to fast-sandbox. "
+            "Any other poolRef stays with the pod workload provider."
+        ),
+    )
     template_s3_publish_secret: str = Field(
         default="sandbox-oss-credentials",
         min_length=1,
