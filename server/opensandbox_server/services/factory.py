@@ -61,5 +61,8 @@ def create_sandbox_service(
         return CompositeSandboxService(
             implementation,
             FastSandboxService(active_config, k8s_client=implementation.k8s_client),
+            image_pools=(
+                active_config.kubernetes.fastpath_image_pools if active_config.kubernetes else ()
+            ),
         )
     return implementations[selected_type](config=active_config)

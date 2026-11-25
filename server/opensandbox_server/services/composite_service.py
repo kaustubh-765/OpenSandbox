@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import logging
+from collections.abc import Iterable
 
 from fastapi import HTTPException
 
@@ -39,9 +40,17 @@ logger = logging.getLogger(__name__)
 
 
 class CompositeSandboxService(SandboxService, ExtensionService):
-    def __init__(self, kubernetes: KubernetesSandboxService, fsb: FastSandboxService):
+    def __init__(
+        self,
+        kubernetes: KubernetesSandboxService,
+        fsb: FastSandboxService,
+        image_pools: Iterable[str] = (),
+    ):
         self._kubernetes = kubernetes
         self._fsb = fsb
+        # [kubernetes].fastpath_image_pools: fast-sandbox pools that accept a
+        # plain image create through extensions.poolRef.
+        self._image_pools = frozenset(pool.strip() for pool in image_pools if pool.strip())
 
     @property
     def fsb_service(self) -> FastSandboxService:
@@ -64,10 +73,16 @@ class CompositeSandboxService(SandboxService, ExtensionService):
         # the microVM catalog and coexist with the container-sandbox
         # workload provider. A snapshotId resolved to an fsb-produced
         # artifact (restore_config.backend == "fsb") selects fsb the same
-        # way; every other create stays with it.
+        # way, as does a poolRef the operator listed in
+        # fastpath_image_pools; every other create stays with it.
         if (request.template_id or "").strip():
             return await self._fsb.create_sandbox(request)
-        if (request.snapshot_id or "").strip() and request.resolved_snapshot_backend == "fsb":
+        if (request.snapshot_id or "").strip():
+            if request.resolved_snapshot_backend == "fsb":
+                return await self._fsb.create_sandbox(request)
+            return await self._kubernetes.create_sandbox(request)
+        pool_ref = str((request.extensions or {}).get("poolRef") or "").strip()
+        if pool_ref and pool_ref in self._image_pools:
             return await self._fsb.create_sandbox(request)
         return await self._kubernetes.create_sandbox(request)
 
