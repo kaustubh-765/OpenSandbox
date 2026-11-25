@@ -55,7 +55,7 @@ Pool limits `2` CPU / `5Gi`, ratios `8` / `1.25`, `maxSandboxesPerPod: 10`:
 
 | Create path | `LegacySlot` | `ResourceAware` |
 | --- | --- | --- |
-| Create with `resourceLimits` | Must equal the pool profile | Forwarded as the sandbox's limits; `cpu`/`memory` validated, other keys (e.g. `pids`) stay pool-owned |
+| Create with `resourceLimits` | Must equal the pool profile | `cpu`/`memory` forwarded as the sandbox's limits (an omitted one takes the pool default); other keys (e.g. `pids`) stay pool-owned and must equal the profile |
 | Create without `resourceLimits` | Pool shape | Pool default limits |
 | [Template](/architecture/fast-sandbox/templates) create | Pool shape | The template's recorded machine shape is forwarded |
 | Snapshot restore | Pool shape | The snapshot's recorded source limits are replayed; caller `resourceLimits` must match them (400 on mismatch) |
