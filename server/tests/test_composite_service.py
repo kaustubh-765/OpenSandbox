@@ -52,6 +52,64 @@ def _run(composite: CompositeSandboxService, request: CreateSandboxRequest) -> o
     return asyncio.run(composite.create_sandbox(request))
 
 
+def _pool_create(pool_ref: str) -> CreateSandboxRequest:
+    request = _create()
+    request.extensions = {"poolRef": pool_ref}
+    return request
+
+
+def test_image_create_into_listed_fsb_pool_routes_to_fsb() -> None:
+    kubernetes = _RecordingBackend("kubernetes")
+    fsb = _RecordingBackend("fsb")
+    composite = CompositeSandboxService(  # type: ignore[arg-type]
+        kubernetes=kubernetes, fsb=fsb, image_pools=[" fsb-pool ", "", "other"]
+    )
+    request = _pool_create("fsb-pool")
+
+    result = _run(composite, request)
+
+    assert result == "created-by-fsb"
+    assert fsb.requests == [request] and kubernetes.requests == []
+
+
+def test_image_create_into_unlisted_pool_stays_with_pod_backend() -> None:
+    kubernetes = _RecordingBackend("kubernetes")
+    fsb = _RecordingBackend("fsb")
+    composite = CompositeSandboxService(  # type: ignore[arg-type]
+        kubernetes=kubernetes, fsb=fsb, image_pools=["fsb-pool"]
+    )
+
+    _run(composite, _pool_create("pod-pool"))
+    _run(composite, _create())
+
+    assert len(kubernetes.requests) == 2 and fsb.requests == []
+
+
+def test_image_pools_default_to_none() -> None:
+    kubernetes = _RecordingBackend("kubernetes")
+    fsb = _RecordingBackend("fsb")
+    composite = CompositeSandboxService(kubernetes=kubernetes, fsb=fsb)  # type: ignore[arg-type]
+
+    _run(composite, _pool_create("fsb-pool"))
+
+    assert kubernetes.requests and fsb.requests == []
+
+
+def test_pod_snapshot_restore_ignores_image_pools() -> None:
+    kubernetes = _RecordingBackend("kubernetes")
+    fsb = _RecordingBackend("fsb")
+    composite = CompositeSandboxService(  # type: ignore[arg-type]
+        kubernetes=kubernetes, fsb=fsb, image_pools=["fsb-pool"]
+    )
+    request = _create(snapshot_id="snap-pod")
+    request.extensions = {"poolRef": "fsb-pool"}
+    request._resolved_snapshot_backend = None
+
+    _run(composite, request)
+
+    assert kubernetes.requests and fsb.requests == []
+
+
 def test_snapshot_restore_from_fsb_backend_routes_to_fsb() -> None:
     kubernetes = _RecordingBackend("kubernetes")
     fsb = _RecordingBackend("fsb")
