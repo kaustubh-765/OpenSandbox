@@ -97,6 +97,44 @@ async def test_snapshot_restore_records_fsb_backend_hint(monkeypatch, tmp_path) 
 
 
 @pytest.mark.asyncio
+async def test_snapshot_restore_into_pool_does_not_require_resource_limits(monkeypatch, tmp_path) -> None:
+    repo = SQLiteSnapshotRepository(tmp_path / "snapshots.db")
+    repo.create(
+        SnapshotRecord(
+            id="snap-fsb-pool",
+            source_sandbox_id="fsb-001",
+            restore_config=SnapshotRestoreConfig(
+                image="registry.example.com/fsb/snap-pool:index",
+                backend="fsb",
+                limits={"cpu": "2", "memory": "4Gi"},
+            ),
+            status=SnapshotStatusRecord(
+                state=SnapshotState.READY,
+                last_transition_at=datetime.now(timezone.utc),
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        "opensandbox_server.services.snapshot_restore.get_snapshot_repository",
+        lambda: repo,
+    )
+
+    # The pool supplies the limits, exactly as for a plain pool create.
+    request = CreateSandboxRequest(snapshotId="snap-fsb-pool", extensions={"poolRef": "fsb-pool"})
+    resolved = await resolve_sandbox_image_from_request(request)
+    assert resolved.image is not None
+    assert resolved.image.uri == "registry.example.com/fsb/snap-pool:index"
+    assert resolved.resolved_snapshot_backend == "fsb"
+    assert resolved.resolved_snapshot_limits == {"cpu": "2", "memory": "4Gi"}
+    assert resolved.extensions == {"poolRef": "fsb-pool"}
+
+    # Without poolRef a full restore still needs explicit limits.
+    with pytest.raises(HTTPException) as exc_info:
+        await resolve_sandbox_image_from_request(CreateSandboxRequest(snapshotId="snap-fsb-pool"))
+    assert exc_info.value.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_snapshot_restore_preserves_explicit_entrypoint(monkeypatch, tmp_path) -> None:
     repo = SQLiteSnapshotRepository(tmp_path / "snapshots.db")
     repo.create(
