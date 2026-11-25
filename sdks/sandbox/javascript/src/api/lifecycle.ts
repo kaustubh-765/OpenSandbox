@@ -1616,8 +1616,10 @@ export interface components {
          *     optional; when omitted, the server creates a per-allocation task using
          *     `['tail', '-f', '/dev/null']`. The Pool must run task-executor and provide
          *     bootstrap plus execd.
-         *     `snapshotId`, `networkPolicy`, `platform`, `volumes`, and
-         *     `credentialProxy.enabled` must not be provided together with `poolRef`.
+         *     `networkPolicy`, `platform`, `volumes`, and `credentialProxy.enabled`
+         *     must not be provided together with `poolRef`. `snapshotId` may accompany
+         *     `poolRef` only for a Fast Sandbox snapshot, which is then restored into
+         *     that Fast Sandbox pool; Kubernetes pod pools reject it.
          *
          *     **Note**: API Key authentication is required via the `OPEN-SANDBOX-API-KEY` header.
          */
