@@ -1897,6 +1897,15 @@ class CreateFsbTemplateRequest(BaseModel):
         None,
         description="Custom key-value metadata for management, filtering, and tagging",
     )
+    build_node_selector: Optional[Dict[str, str]] = Field(
+        None,
+        alias="buildNodeSelector",
+        description=(
+            "Node labels the build pod must also match, merged into the "
+            "builder's nodeSelector (the platform's KVM label always applies). "
+            "Use it to build a template on the CPU family that will restore it."
+        ),
+    )
     readiness: Optional[FsbTemplateReadiness] = Field(
         None,
         description="Optional build-side readiness gate",
