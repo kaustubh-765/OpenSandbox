@@ -329,6 +329,71 @@ def test_map_create_request_skips_pool_check_when_profile_unknown():
     assert create.image == "python:3.11"
 
 
+def _resource_aware_create(limits, pool_resources=None):
+    # resourceLimits may only be omitted together with poolRef.
+    request = (
+        _base_request(resource_limits=ResourceLimits(root=limits))
+        if limits is not None
+        else _base_request(resource_limits=None, extensions={"poolRef": "ml-pool"})
+    )
+    return map_create_request(
+        request,
+        "sbx-1",
+        "ns-1",
+        now=NOW,
+        pool_resources=pool_resources or {"cpu": "1", "memory": "2Gi", "pids": "256"},
+        pool_is_resource_aware=True,
+    )
+
+
+def test_map_create_request_forwards_size_to_resource_aware_pool():
+    create = _resource_aware_create({"cpu": "4", "memory": "8Gi", "pids": "256"})
+    assert create.resources.limits.cpu == "4"
+    assert create.resources.limits.memory == "8Gi"
+
+
+def test_map_create_request_resource_aware_fills_missing_dimension_from_pool():
+    create = _resource_aware_create({"memory": "4Gi"})
+    assert (create.resources.limits.cpu, create.resources.limits.memory) == ("1", "4Gi")
+
+
+def test_map_create_request_resource_aware_without_size_leaves_field_unset():
+    # No caller cpu/memory: FastPath applies the pool defaults, exactly as before.
+    assert not _resource_aware_create(None).HasField("resources")
+    assert not _resource_aware_create({"pids": "256"}).HasField("resources")
+
+
+def test_map_create_request_resource_aware_keeps_other_keys_pool_owned():
+    with pytest.raises(UnsupportedFieldError, match="only cpu and memory are per-sandbox"):
+        _resource_aware_create({"cpu": "2", "memory": "4Gi", "pids": "999"})
+    with pytest.raises(UnsupportedFieldError, match="not defined by the selected SandboxPool"):
+        _resource_aware_create({"cpu": "2", "memory": "4Gi", "gpu": "1"})
+
+
+def test_map_create_request_resource_aware_requires_a_default_for_missing_dimension():
+    with pytest.raises(UnsupportedFieldError, match="'memory' is not set"):
+        _resource_aware_create({"cpu": "2"}, pool_resources={"cpu": "1"})
+
+
+@pytest.mark.parametrize("limits", [{"cpu": "0", "memory": "1Gi"}, {"cpu": "5m", "memory": "1Gi"}])
+def test_map_create_request_resource_aware_rejects_invalid_size(limits):
+    with pytest.raises(UnsupportedFieldError) as exc_info:
+        _resource_aware_create(limits)
+    assert exc_info.value.field == "resourceLimits"
+
+
+def test_map_create_request_legacy_pool_still_requires_pool_equal_size():
+    with pytest.raises(UnsupportedFieldError, match="resources are fixed per pool"):
+        map_create_request(
+            _base_request(resource_limits=ResourceLimits(root={"cpu": "4", "memory": "8Gi"})),
+            "sbx-1",
+            "ns-1",
+            now=NOW,
+            pool_resources={"cpu": "1", "memory": "2Gi"},
+            pool_is_resource_aware=False,
+        )
+
+
 def _info(
     *,
     runtime_state=pb2.RUNTIME_STATE_READY,
