@@ -104,7 +104,9 @@ async def resolve_sandbox_image_from_request(
     request._resolved_rootfs_only = (
         request._resolved_snapshot_backend == "fsb" and snapshot.mode == "rootfsOnly"
     )
-    if request.resource_limits is None and not request._resolved_rootfs_only:
+    # With poolRef the target pool supplies the limits, as on a plain pool create.
+    has_pool_ref = bool((request.extensions or {}).get("poolRef", "").strip())
+    if request.resource_limits is None and not request._resolved_rootfs_only and not has_pool_ref:
         raise HTTPException(status_code=422, detail={"code": "INVALID_PARAMETER", "message": "resourceLimits required for this snapshot"})
     if snapshot.restore_config.limits:
         request._resolved_snapshot_limits = dict(snapshot.restore_config.limits)

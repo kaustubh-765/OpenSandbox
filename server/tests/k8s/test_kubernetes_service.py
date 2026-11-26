@@ -1012,6 +1012,26 @@ spec:
         provider.create_workload.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_create_sandbox_pool_mode_rejects_snapshot_id_with_400(self, k8s_service):
+        from opensandbox_server.api.schema import CreateSandboxRequest
+        from opensandbox_server.services.k8s.batchsandbox_provider import BatchSandboxProvider
+
+        provider = BatchSandboxProvider(k8s_service.k8s_client, k8s_service.app_config)
+        provider.create_workload = MagicMock()
+        k8s_service.workload_provider = provider
+
+        # Pod pools cannot restore a snapshot; only fast-sandbox pools can.
+        pool_request = CreateSandboxRequest(snapshotId="snap-001", extensions={"poolRef": "my-pool"})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await k8s_service.create_sandbox(pool_request)
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["code"] == SandboxErrorCodes.INVALID_PARAMETER
+        assert "snapshotId cannot be used together with poolRef" in exc_info.value.detail["message"]
+        provider.create_workload.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_create_sandbox_pool_mode_rejects_credential_proxy_with_400(
         self, k8s_service
     ):
