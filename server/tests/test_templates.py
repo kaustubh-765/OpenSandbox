@@ -571,6 +571,33 @@ def test_create_does_not_inject_execd_init_when_disabled(service, crs):
     assert "envs" not in crs.created[-1]["spec"]
 
 
+def test_create_projects_build_node_selector_annotation(service, crs, repo):
+    import json
+
+    selector = {"example.com/cpu-family": "family-a", "zone": "z1"}
+    record = service.create_template(_create_request(buildNodeSelector=selector))
+    annotations = crs.created[-1]["metadata"]["annotations"]
+    assert json.loads(annotations["sandbox.fast.io/build-node-selector"]) == selector
+    # Stored with the build intent so the CR projection is reproducible.
+    assert repo.get(record.template_id, record.namespace).spec["buildNodeSelector"] == selector
+
+    service.create_template(_create_request())
+    assert "annotations" not in crs.created[-1]["metadata"]
+
+
+@pytest.mark.parametrize(
+    "selector", [{"bad key!": "x"}, {"zone": "not a label value"}, {"zone": "x" * 64}]
+)
+def test_create_rejects_invalid_build_node_selector(service, crs, selector):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as excinfo:
+        service.create_template(_create_request(buildNodeSelector=selector))
+    assert excinfo.value.status_code == 400
+    assert "buildNodeSelector" in str(excinfo.value.detail)
+    assert crs.created == []
+
+
 def test_create_rejects_invalid_env_names(service):
     from fastapi import HTTPException
 
