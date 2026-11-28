@@ -1241,8 +1241,8 @@ class CreateSandboxRequest(BaseModel):
         if self.template_id is not None:
             self.template_id = None  # normalize blank templateId
 
-        # When poolRef is set, image/snapshotId/entrypoint/resourceLimits are
-        # all defined in the Pool CRD and not required from the caller.
+        # When poolRef is set, image/entrypoint/resourceLimits are all
+        # defined by the pool and not required from the caller.
         has_pool_ref = bool((self.extensions or {}).get("poolRef", "").strip())
         if has_pool_ref:
             if self.lifecycle is not None and self.lifecycle.has_hooks:
@@ -1251,12 +1251,15 @@ class CreateSandboxRequest(BaseModel):
                     "lifecycle.idlePolicy is not a hook and is allowed where "
                     "the backend supports it."
                 )
-            # Reject conflicting fields that would be ignored in pool mode
+            # A snapshotId with poolRef restores the snapshot into that pool.
+            # Only fast-sandbox pools can do this; the pod backend rejects it
+            # after the snapshot is resolved.
             if bool((self.snapshot_id or "").strip()):
-                raise ValueError("snapshotId cannot be used together with poolRef.")
+                if self.image is not None and self.image.uri.strip():
+                    raise ValueError("Exactly one of image or snapshotId must be provided.")
             # Normalize blank snapshotId so downstream code won't see
             # a truthy whitespace string (e.g. "   ") as a real value.
-            if self.snapshot_id is not None and not self.snapshot_id.strip():
+            elif self.snapshot_id is not None:
                 self.snapshot_id = None
             return self
 

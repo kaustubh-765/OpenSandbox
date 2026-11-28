@@ -1098,6 +1098,20 @@ class KubernetesSandboxService(
                 },
             )
 
+        if has_pool_ref and (request.snapshot_id or "").strip():
+            # Pod pools are pre-created from the pool template and cannot
+            # restore a snapshot; only fast-sandbox pools accept the pair.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": SandboxErrorCodes.INVALID_PARAMETER,
+                    "message": (
+                        "snapshotId cannot be used together with poolRef on the "
+                        "Kubernetes pod backend; only fast-sandbox snapshots can be "
+                        "restored into a pool."
+                    ),
+                },
+            )
         if not has_pool_ref:
             request = await resolve_sandbox_image_from_request(request)
             ensure_entrypoint(request.entrypoint or [])

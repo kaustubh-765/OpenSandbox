@@ -65,6 +65,20 @@ def test_snapshot_restore_from_fsb_backend_routes_to_fsb() -> None:
     assert fsb.requests and kubernetes.requests == []
 
 
+def test_fsb_snapshot_restore_into_named_pool_routes_to_fsb() -> None:
+    kubernetes = _RecordingBackend("kubernetes")
+    fsb = _RecordingBackend("fsb")
+    composite = CompositeSandboxService(kubernetes=kubernetes, fsb=fsb)  # type: ignore[arg-type]
+    request = _create(snapshot_id="snap-1")
+    request.extensions = {"poolRef": "fsb-pool"}
+    request._resolved_snapshot_backend = "fsb"
+
+    result = _run(composite, request)
+
+    assert result == "created-by-fsb"
+    assert fsb.requests == [request] and kubernetes.requests == []
+
+
 def test_snapshot_restore_from_default_backend_stays_with_pod_backend() -> None:
     kubernetes = _RecordingBackend("kubernetes")
     fsb = _RecordingBackend("fsb")
